@@ -69,7 +69,7 @@ public final class SSCA2Cluster(N:Int) {
 
     private def vertexPlace(v:Int) = v / verticesPerPlace;
     
-    private def getVertexPlaceMap(v:Int, edgeStart:Int, edgeEnd:Int) {
+    private def getAdjacentVertecesPlaces(v:Int, edgeStart:Int, edgeEnd:Int) {
         val map = new HashMap[Long,ArrayList[Int]]();
         var dest:Long = vertexPlace(v);
         var list:ArrayList[Int] = new ArrayList[Int]();
@@ -89,7 +89,7 @@ public final class SSCA2Cluster(N:Int) {
             }
             list.add(w);
         }
-        if (verbose > 0n) {
+        if (verbose > 1n) {
             printVertexPlaceMap(v, map);
         }
         return map;
@@ -110,7 +110,7 @@ public final class SSCA2Cluster(N:Int) {
         Console.OUT.println(str);
     } 
     
-    private def processVertex(v:Int, placeIndex:Long, tx:AbstractTx[Int], clusterSize:Long, accum:Long):Long {
+    private def processVertex(v:Int, clusterId:Long, tx:AbstractTx[Int], clusterSize:Long, accum:Long):Long {
         // Get the start and the end points for the edge list for "v"
         val edgeStart:Int = graph.begin(v);
         val edgeEnd:Int = graph.end(v);
@@ -118,38 +118,35 @@ public final class SSCA2Cluster(N:Int) {
     
         var innerCount:Long = 0;
         var outerCount:Long = 0;
-        val map = getVertexPlaceMap(v, edgeStart, edgeEnd);
+        val map = getAdjacentVertecesPlaces(v, edgeStart, edgeEnd);
         val iter = map.keySet().iterator();
         while (iter.hasNext()) {
             val dest = iter.next();
             val vertices = map.getOrThrow(dest);
             innerCount += vertices.size();
+            
+            if (verbose > 1n) Console.OUT.println(here + " tx["+tx.id+"].asyncAt("+dest+") started");
             tx.asyncAt(dest, () => {
                 for (s in vertices) {
                     val cluster = tx.get(s);
                     if (cluster == null)
-                        tx.put(s, new CloneableLong(placeIndex));
-                    else if ((cluster as CloneableLong).v != placeIndex)
-                        throw new ConflictException("vertex " + s + " allocated by place " + (cluster as CloneableLong).v, here);
+                        tx.put(s, new CloneableLong(clusterId));
+                    else if ((cluster as CloneableLong).v != clusterId)
+                        throw new ConflictException(here + " vertex " + s + " allocated by place " + (cluster as CloneableLong).v, here);
                 }
             });
         }
         
         outerCount = accum + innerCount;
         
-        if (edgeCount > 0 && accum + innerCount < clusterSize) {
+        if (verbose > 1n) Console.OUT.println(here + " tx["+tx.id+"] edgeCount="+edgeCount + " outerCount["+outerCount+"] < clusterSize["+clusterSize+"]=" + (outerCount < clusterSize));
+        if (edgeCount > 0 && outerCount < clusterSize) {
             val indx = Math.abs(random.nextInt()) % edgeCount;
             val nextV:Int = graph.getAdjacentVertexFromIndex(edgeStart + indx);
-            outerCount = processVertex(nextV, placeIndex, tx, clusterSize, accum + innerCount) ;
+            outerCount = processVertex(nextV, clusterId, tx, clusterSize, accum + innerCount) ;
         }
         
         return outerCount;
-    }
-    
-    private def selectRandomAdjacent(v:Int, edgeStart:Int, edgeEnd:Int) {
-        val rnd = random.nextInt();
-        
-        return 0n;
     }
     
     /**
@@ -157,22 +154,26 @@ public final class SSCA2Cluster(N:Int) {
      */
     private def generateClusters(val startVertex:Int, val endVertex:Int, clusterSize:Long) {
         Console.OUT.println(here + " " + startVertex + "-" + endVertex);
-        val placeIndex = here.id;
+        val clusterId = here.id;
         // Iterate over each of the vertices in my portion.
-        for(var vertexIndex:Int=startVertex; vertexIndex<endVertex; ++vertexIndex) { 
+        var v:Long = 1;
+        val vCount = endVertex - startVertex;
+        for(var vertexIndex:Int=startVertex; vertexIndex<endVertex; ++vertexIndex, ++v) { 
             val s:Int = verticesToWorkOn(vertexIndex);
             val dest = vertexPlace(s);
 
             val closure = (tx:AbstractTx[Int]) => {
-                return processVertex(s, placeIndex, tx, clusterSize, 0);
+                return processVertex(s, clusterId, tx, clusterSize, 0);
             };
             
             try {
+            	if (verbose > 0) Console.OUT.println(here + " vertex["+s+"] cluster started   ["+v+"/"+vCount+"]");
                 val result = map.executeTransaction(null, closure, 1, -1);
-                if (verbose > 0) Console.OUT.println(here + " vertex["+s+"] cluster succeeded, count=" + result.output);
+                if (verbose > 0) Console.OUT.println(here + " vertex["+s+"] cluster succeeded ["+v+"/"+vCount+"], count=" + result.output);
             }catch (ex:Exception) {
-                if (verbose > 0) Console.OUT.println(here + " vertex["+s+"] cluster failed");
+                if (verbose > 0) Console.OUT.println(here + " vertex["+s+"] cluster failed    ["+v+"/"+vCount+"]   msg["+ex.getMessage()+"] ");
             }
+            
         }
     }
     
@@ -255,6 +256,7 @@ public final class SSCA2Cluster(N:Int) {
         Place.places().broadcastFlat(()=>{
                 val h = here.id as Int;
                 plh().generateClusters((N as Long*h/max) as Int, (N as Long*(h+1)/max) as Int, clusterSize);
+                Console.OUT.println(here + " ... finished ...");
             });
 
         time = System.nanoTime() - time;
