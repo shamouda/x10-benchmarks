@@ -19,6 +19,7 @@ import x10.util.resilient.localstore.CloneableLong;
 import x10.util.resilient.localstore.tx.ConflictException;
 import x10.util.ArrayList;
 import x10.util.HashMap;
+import x10.util.HashSet;
 
 public final class SSCA2Cluster(N:Int) {
     val graph:Graph;
@@ -70,11 +71,11 @@ public final class SSCA2Cluster(N:Int) {
     private def vertexPlace(v:Int) = v / verticesPerPlace;
     
     private def getAdjacentVertecesPlaces(v:Int, edgeStart:Int, edgeEnd:Int) {
-        val map = new HashMap[Long,ArrayList[Int]]();
+        val map = new HashMap[Long,HashSet[Int]]();
         var dest:Long = vertexPlace(v);
-        var list:ArrayList[Int] = new ArrayList[Int]();
-        list.add(v);
-        map.put (dest, list);
+        var set:HashSet[Int] = new HashSet[Int]();
+        set.add(v);
+        map.put (dest, set);
         
         // Iterate over all its neighbors
         for(var wIndex:Int=edgeStart; wIndex<edgeEnd; ++wIndex) {
@@ -82,12 +83,12 @@ public final class SSCA2Cluster(N:Int) {
             val w:Int = graph.getAdjacentVertexFromIndex(wIndex);
             dest = vertexPlace(w);
             
-            list = map.getOrElse(dest, null);
-            if (list == null) {
-                list = new ArrayList[Int]();
-                map.put(dest, list);
+            set = map.getOrElse(dest, null);
+            if (set == null) {
+                set = new HashSet[Int]();
+                map.put(dest, set);
             }
-            list.add(w);
+            set.add(w);
         }
         if (verbose > 1n) {
             printVertexPlaceMap(v, map);
@@ -95,14 +96,14 @@ public final class SSCA2Cluster(N:Int) {
         return map;
     }
     
-    private def printVertexPlaceMap(v:Int, map:HashMap[Long,ArrayList[Int]]) {
+    private def printVertexPlaceMap(v:Int, map:HashMap[Long,HashSet[Int]]) {
         var str:String = "vertexMap v=" + v + ":";
         val iter = map.keySet().iterator();
         while (iter.hasNext()) {
             val pl = iter.next();
             str += " place(" + pl + ") {";
-            val list = map.getOrThrow(pl);
-            for (l in list) {
+            val set = map.getOrThrow(pl);
+            for (l in set) {
                 str += l + " ";
             }
             str += "}";
@@ -132,7 +133,7 @@ public final class SSCA2Cluster(N:Int) {
                     if (cluster == null)
                         tx.put(s, new CloneableLong(clusterId));
                     else if ((cluster as CloneableLong).v != clusterId)
-                        throw new ConflictException(here + " vertex " + s + " allocated by place " + (cluster as CloneableLong).v, here);
+                        throw new ConflictException("Tx[" + tx.id + "] " + here + " vertex " + s + " allocated by place " + (cluster as CloneableLong).v, here);
                 }
             });
         }
