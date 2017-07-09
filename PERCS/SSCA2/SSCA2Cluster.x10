@@ -92,14 +92,14 @@ public final class SSCA2Cluster(N:Int) {
         for(var wIndex:Int=edgeStart; wIndex<edgeEnd; ++wIndex) {
             // Get the target of the current edge.
             val w:Int = graph.getAdjacentVertexFromIndex(wIndex);
-            dest = vertexPlace(w);
-            
-            set = map.getOrElse(dest, null);
-            if (set == null) {
-                set = new HashSet[Int]();
-                map.put(dest, set);
-            }
-            set.add(w);
+    		dest = vertexPlace(w);
+        
+    		set = map.getOrElse(dest, null);
+    		if (set == null) {
+    			set = new HashSet[Int]();
+    			map.put(dest, set);
+    		}
+    		set.add(w);
         }
         if (verbose > 1n) {
             printVertexPlaceMap(v, map);
@@ -132,21 +132,23 @@ public final class SSCA2Cluster(N:Int) {
         var outerCount:Long = 0;
         val map = getAdjacentVertecesPlaces(v, edgeStart, edgeEnd);
         val iter = map.keySet().iterator();
-        while (iter.hasNext()) {
-            val dest = iter.next();
-            val vertices = map.getOrThrow(dest);
-            innerCount += vertices.size();
-            
-            if (verbose > 1n) Console.OUT.println(here + " tx["+tx.id+"].asyncAt("+dest+") started");
-            tx.asyncAt(dest, () => {
-                for (s in vertices) {
-                    val color = tx.get(s);
-                    if (color == null)
-                        tx.put(s, new Color(placeId, clusterId));
-                    else if (! ((color as Color).placeId == placeId && (color as Color).clusterId == clusterId ) )
-                        throw new ConflictException("Tx[" + tx.id + "] " + here + " vertex " + s + " allocated by place " + (color as Color).placeId, here);
-                }
-            });
+        finish { /*finish is important to prevent concurrent actions on the same transaction at a certain place*/
+	        while (iter.hasNext()) {
+	            val dest = iter.next();
+	            val vertices = map.getOrThrow(dest);
+	            innerCount += vertices.size();
+	            
+	            if (verbose > 1n) Console.OUT.println(here + " tx["+tx.id+"].asyncAt("+dest+") started");
+	            tx.asyncAt(dest, () => {
+	                for (s in vertices) {
+	                    val color = tx.get(s);
+	                    if (color == null)
+	                        tx.put(s, new Color(placeId, clusterId));
+	                    else if (! ((color as Color).placeId == placeId && (color as Color).clusterId == clusterId ) )
+	                        throw new ConflictException("Tx[" + tx.id + "] " + here + " vertex " + s + " allocated by place " + (color as Color).placeId, here);
+	                }
+	            });
+	        }
         }
         
         outerCount = accum + innerCount;
@@ -250,7 +252,7 @@ public final class SSCA2Cluster(N:Int) {
     /**
      * Calls betweeness, prints out the statistics and what not.
      */
-    private static def crunchNumbers(map:ResilientNativeMap[Int], rmat:Rmat, permute:Int, clusterSize:Long, places:Long, g:Long, verbose:Int) {
+    private static def crunchNumbers(map:ResilientNativeMap[Int], rmat:Rmat, permute:Int, clusterSize:Long, places:Long, g:Long, r:Long, verbose:Int) {
         var time:Long = System.nanoTime();
 
         val plh = PlaceLocalHandle.makeFlat[SSCA2Cluster](Place.places(), ()=>SSCA2Cluster.make(map, rmat, permute, places, new Random(here.id), verbose));
@@ -270,16 +272,18 @@ public final class SSCA2Cluster(N:Int) {
                 val h = here.id as Int;
                 plh().generateClusters((N as Long*h/max) as Int, (N as Long*(h+1)/max) as Int, clusterSize, g);
                 Console.OUT.println(here + " ... finished ...");
-            });
+        });
 
         time = System.nanoTime() - time;
         val procTime = time/1E9;
         val totalTime = distTime + procTime;
         val procPct = procTime*100.0/totalTime;
 
-        //if(verbose > 2) 
+        if(verbose > 2 || r > 0) 
             plh().printClusters();
 
+        map.printTxStatistics();
+        
         Console.OUT.println("Places: " + max + "  N: " + N + "  Setup: " + distTime + "s  Processing: " + procTime + "s  Total: " + totalTime + "s  (proc: " + procPct  +  "%).");
     }
 
@@ -298,6 +302,7 @@ public final class SSCA2Cluster(N:Int) {
             Option("d", "", "Probability d"),
             Option("p", "", "Permutation"),
             Option("g", "", "Progress"),
+            Option("r", "", "Print resulting clusters"),
             Option("v", "", "Verbose")]);
 
         val spare:Long = cmdLineParams("-sp", 0);
@@ -309,6 +314,7 @@ public final class SSCA2Cluster(N:Int) {
         val c:Double = cmdLineParams("-c", 0.1);
         val d:Double = cmdLineParams("-d", 0.25);
         val g:Long = cmdLineParams("-g", -1);
+        val r:Long = cmdLineParams("-r", 0);
         val permute:Int = cmdLineParams("-p", 1n); // on by default
         val verbose:Int = cmdLineParams("-v", 0n); // off by default
 
@@ -331,6 +337,6 @@ public final class SSCA2Cluster(N:Int) {
         Console.OUT.println("active places = " + activePlaces.size());
         
         
-        crunchNumbers(map, Rmat(seed, n, a, b, c, d), permute, clusterSize, activePlaces.size(), g, verbose);
+        crunchNumbers(map, Rmat(seed, n, a, b, c, d), permute, clusterSize, activePlaces.size(), g, r, verbose);
     }
 }
