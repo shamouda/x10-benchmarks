@@ -16,6 +16,7 @@ import x10.util.resilient.localstore.AbstractTx;
 import x10.util.resilient.localstore.tx.FatalTransactionException;
 import x10.util.resilient.localstore.Cloneable;
 import x10.util.resilient.localstore.tx.ConflictException;
+import x10.util.resilient.localstore.TxResult;
 import x10.util.ArrayList;
 import x10.util.HashMap;
 import x10.util.HashSet;
@@ -166,7 +167,7 @@ public final class SSCA2Cluster(N:Int) {
     /**
      * Dump the clusters.
      */
-    private def generateClusters(val startVertex:Int, val endVertex:Int, clusterSize:Long, g:Long) {
+    private def generateClusters(val startVertex:Int, val endVertex:Int, clusterSize:Long, flat:Boolean, g:Long) {
         Console.OUT.println(here + " " + startVertex + "-" + endVertex);
         val placeId = here.id;
         // Iterate over each of the vertices in my portion.
@@ -183,7 +184,7 @@ public final class SSCA2Cluster(N:Int) {
             
             try {
             	if (verbose > 0) Console.OUT.println(here + " vertex["+s+"] cluster started   ["+clusterId+"/"+vCount+"]");
-                val result = map.executeTransaction(null, closure, 1, -1);
+                val result = map.executeTransaction(null, closure, 1, -1, flat);
                 if (g > 0 && clusterId%g == 0) Console.OUT.println(here + " vertex["+s+"] cluster succeeded ["+clusterId+"/"+vCount+"], count=" + result.output);
             } catch (ex:Exception) {
                 if (verbose > 0) Console.OUT.println(here + " vertex["+s+"] cluster failed    ["+clusterId+"/"+vCount+"]   msg["+ex.getMessage()+"] ");
@@ -252,7 +253,8 @@ public final class SSCA2Cluster(N:Int) {
     /**
      * Calls betweeness, prints out the statistics and what not.
      */
-    private static def crunchNumbers(map:ResilientNativeMap[Int], rmat:Rmat, permute:Int, clusterSize:Long, places:Long, g:Long, r:Long, verbose:Int) {
+    private static def crunchNumbers(map:ResilientNativeMap[Int], rmat:Rmat, permute:Int, clusterSize:Long, places:Long, flat:Boolean, 
+    		g:Long, r:Long, verbose:Int) {
         var time:Long = System.nanoTime();
 
         val plh = PlaceLocalHandle.makeFlat[SSCA2Cluster](Place.places(), ()=>SSCA2Cluster.make(map, rmat, permute, places, new Random(here.id), verbose));
@@ -270,7 +272,7 @@ public final class SSCA2Cluster(N:Int) {
         // Loop over all the places and crunch the numbers.
         Place.places().broadcastFlat(()=>{
                 val h = here.id as Int;
-                plh().generateClusters((N as Long*h/max) as Int, (N as Long*(h+1)/max) as Int, clusterSize, g);
+                plh().generateClusters((N as Long*h/max) as Int, (N as Long*(h+1)/max) as Int, clusterSize, flat, g);
                 Console.OUT.println(here + " ... finished ...");
         });
 
@@ -303,6 +305,7 @@ public final class SSCA2Cluster(N:Int) {
             Option("p", "", "Permutation"),
             Option("g", "", "Progress"),
             Option("r", "", "Print resulting clusters"),
+            Option("flat", "", "PRAGMA.FINISH_SPMD"),
             Option("v", "", "Verbose")]);
 
         val spare:Long = cmdLineParams("-sp", 0);
@@ -315,6 +318,7 @@ public final class SSCA2Cluster(N:Int) {
         val d:Double = cmdLineParams("-d", 0.25);
         val g:Long = cmdLineParams("-g", -1);
         val r:Long = cmdLineParams("-r", 0);
+        val flat:Boolean = cmdLineParams("-flat", 0) == 1;
         val permute:Int = cmdLineParams("-p", 1n); // on by default
         val verbose:Int = cmdLineParams("-v", 0n); // off by default
 
@@ -337,6 +341,6 @@ public final class SSCA2Cluster(N:Int) {
         Console.OUT.println("active places = " + activePlaces.size());
         
         
-        crunchNumbers(map, Rmat(seed, n, a, b, c, d), permute, clusterSize, activePlaces.size(), g, r, verbose);
+        crunchNumbers(map, Rmat(seed, n, a, b, c, d), permute, clusterSize, activePlaces.size(), flat, g, r, verbose);
     }
 }
