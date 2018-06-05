@@ -20,6 +20,7 @@ import x10.util.resilient.localstore.TxResult;
 import x10.util.ArrayList;
 import x10.util.HashMap;
 import x10.util.HashSet;
+import x10.xrx.Runtime;
 
 public final class SSCA2Cluster(N:Int) {
     val graph:Graph;
@@ -133,7 +134,8 @@ public final class SSCA2Cluster(N:Int) {
         var outerCount:Long = 0;
         val map = getAdjacentVertecesPlaces(v, edgeStart, edgeEnd);
         val iter = map.keySet().iterator();
-        finish { /*finish is important to prevent concurrent actions on the same transaction at a certain place*/
+        //finish 
+        { /*finish is important to prevent concurrent actions on the same transaction at a certain place*/
 	        while (iter.hasNext()) {
 	            val dest = iter.next();
 	            val vertices = map.getOrThrow(dest);
@@ -141,12 +143,18 @@ public final class SSCA2Cluster(N:Int) {
 	            
 	            if (verbose > 1n) Console.OUT.println(here + " tx["+tx.id+"].asyncAt("+dest+") started");
 	            tx.asyncAt(dest, () => {
+	                val used = new HashSet[Int]();
 	                for (s in vertices) {
+	                    if (used.contains(s))
+                            continue;
+	                    
 	                    val color = tx.get(s);
-	                    if (color == null)
+	                    if (color == null) {
 	                        tx.put(s, new Color(placeId, clusterId));
-	                    else if (! ((color as Color).placeId == placeId && (color as Color).clusterId == clusterId ) )
-	                        throw new ConflictException("Tx[" + tx.id + "] " + here + " vertex " + s + " allocated by place " + (color as Color).placeId, here);
+	                    }
+	                    used.add(s);
+	                    //else if (! ((color as Color).placeId == placeId && (color as Color).clusterId == clusterId ) )
+	                    //    throw new ConflictException("Tx[" + tx.id + "] " + here + " vertex " + s + " allocated by place " + (color as Color).placeId, here);
 	                }
 	            });
 	        }
@@ -323,6 +331,18 @@ public final class SSCA2Cluster(N:Int) {
         val verbose:Int = cmdLineParams("-v", 0n); // off by default
 
         Console.OUT.println("Running SSCA2 with the following parameters:");
+        Console.OUT.println("X10_NPLACES="  + Place.numPlaces());
+        Console.OUT.println("X10_NTHREADS=" + Runtime.NTHREADS);
+        Console.OUT.println("X10_NUM_IMMEDIATE_THREADS=" + System.getenv("X10_NUM_IMMEDIATE_THREADS"));
+        Console.OUT.println("X10_RESILIENT_MODE=" + x10.xrx.Runtime.RESILIENT_MODE);
+        Console.OUT.println("TM=" + System.getenv("TM"));
+        Console.OUT.println("LOCK_FREE=" + System.getenv("LOCK_FREE"));
+        Console.OUT.println("DISABLE_INCR_PARALLELISM=" + System.getenv("DISABLE_INCR_PARALLELISM"));
+        Console.OUT.println("X10_EXIT_BY_SIGKILL=" + System.getenv("X10_EXIT_BY_SIGKILL"));
+        Console.OUT.println("DISABLE_SLAVE=" + System.getenv("DISABLE_SLAVE"));
+        Console.OUT.println("ENABLE_STAT=" + System.getenv("ENABLE_STAT"));
+        Console.OUT.println("BUSY_LOCK=" + System.getenv("BUSY_LOCK"));
+        
         Console.OUT.println("clusterSize = " + clusterSize);
         Console.OUT.println("seed = " + seed);
         Console.OUT.println("N = " + (1<<n));
@@ -331,6 +351,11 @@ public final class SSCA2Cluster(N:Int) {
         Console.OUT.println("c = " + c);
         Console.OUT.println("d = " + d);
         
+        if (!TxConfig.BUSY_LOCK) {
+            Console.OUT.println("!!!!ERROR: you must set BUSY_LOCK=1 in this program!!!!");
+            return;
+        }
+            
         val mgr = new PlaceManager(spare, false);
         val activePlaces = mgr.activePlaces();
         val immediateRecovery = true;
