@@ -7,22 +7,23 @@ import x10.util.concurrent.Lock;
 
 import x10.util.resilient.PlaceManager;
 import x10.util.resilient.localstore.TxConfig;
-import x10.util.resilient.localstore.tx.FatalTransactionException;
+import x10.xrx.TxStoreFatalException;
 import x10.util.resilient.localstore.Cloneable;
-import x10.util.resilient.localstore.tx.ConflictException;
+import x10.xrx.TxStoreConflictException;
 import x10.util.ArrayList;
 import x10.util.HashMap;
 import x10.util.HashSet;
-import x10.xrx.ElasticApp;
+import x10.xrx.NonShrinkingApp;
 import x10.xrx.TxStore;
 import x10.xrx.Tx;
+import x10.xrx.TxLocking;
 import x10.xrx.Runtime;
 import x10.compiler.Uncounted;
 import x10.util.concurrent.SimpleLatch;
 import x10.util.concurrent.AtomicInteger;
 import x10.util.GrowableRail;
 
-public final class Clustering(plh:PlaceLocalHandle[ClusteringState]) implements ElasticApp {
+public final class Clustering(plh:PlaceLocalHandle[ClusteringState]) implements NonShrinkingApp {
     public static val resilient = x10.xrx.Runtime.RESILIENT_MODE > 0;
     public static val asyncRecovery = true;
     
@@ -49,14 +50,14 @@ public final class Clustering(plh:PlaceLocalHandle[ClusteringState]) implements 
         for(var wIndex:Int=edgeStart; wIndex<edgeEnd; ++wIndex) {
             // Get the target of the current edge.
             val w:Int = graph.getAdjacentVertexFromIndex(wIndex);
-    		dest = w / verticesPerPlace;
+            dest = w / verticesPerPlace;
         
-    		set = map.getOrElse(dest, null);
-    		if (set == null) {
-    			set = new HashSet[Int]();
-    			map.put(dest, set);
-    		}
-    		set.add(w);
+            set = map.getOrElse(dest, null);
+            if (set == null) {
+                set = new HashSet[Int]();
+                map.put(dest, set);
+            }
+            set.add(w);
         }        
         return map;
     }
@@ -94,38 +95,37 @@ public final class Clustering(plh:PlaceLocalHandle[ClusteringState]) implements 
             printVertexPlaceMap(v, map);
         }
         val iter = map.keySet().iterator();
-        //finish 
-        { /*finish is important to prevent concurrent actions on the same transaction at a certain place*/
-	        while (iter.hasNext()) {
-	            val dest = iter.next();
-	            val vertices = map.getOrThrow(dest);
-	            innerCount += vertices.size();
-	            
-	            //Console.OUT.println("Tx["+tx.id+"] " + TxConfig.txIdToString (tx.id)+ " here["+here+"].asyncAt("+dest+") started");
-	            if (verbose > 1n) Console.OUT.println(here + " tx["+tx.id+"].asyncAt("+dest+") started");
-	            tx.asyncAt(dest, () => {
-	                val used = new HashSet[Int]();
-	                for (s in vertices) {
-	                    if (used.contains(s))
-	                        continue;
-	                    //Console.OUT.println("Tx["+tx.id+"] " + TxConfig.txIdToString (tx.id)+ " here["+here+"] get("+s+") started <<");
-	                    val color = tx.get(s);
-	                    //Console.OUT.println("Tx["+tx.id+"] " + TxConfig.txIdToString (tx.id)+ " here["+here+"] get("+s+") ended >>");
-	                    if (color == null) {
-	                        try {
-	                      //      Console.OUT.println("Tx["+tx.id+"] " + TxConfig.txIdToString (tx.id)+ " here["+here+"] put("+s+") started <<");
-	                            tx.put(s, new Color(placeId, clusterId));
-	                            
-	                        } finally {
-	                       //     Console.OUT.println("Tx["+tx.id+"] " + TxConfig.txIdToString (tx.id)+ " here["+here+"] put("+s+") ended >>");
-	                        }
-	                    }
-	                    used.add(s);
-	                    //else if (! ((color as Color).placeId == placeId && (color as Color).clusterId == clusterId ) )
-	                    //    throw new ConflictException("Tx[" + tx.id + "] " + here + " vertex " + s + " allocated by place " + (color as Color).placeId, here);
-	                }
-	            });
-	        }
+        { 
+            while (iter.hasNext()) {
+                val dest = iter.next();
+                val vertices = map.getOrThrow(dest);
+                innerCount += vertices.size();
+                
+                //Console.OUT.println("Tx["+tx.id+"] " + TxConfig.txIdToString (tx.id)+ " here["+here+"].asyncAt("+dest+") started");
+                if (verbose > 1n) Console.OUT.println(here + " tx["+tx.id+"].asyncAt("+dest+") started");
+                tx.asyncAt(dest, () => {
+                    val used = new HashSet[Int]();
+                    for (s in vertices) {
+                        if (used.contains(s))
+                            continue;
+                        //Console.OUT.println("Tx["+tx.id+"] " + TxConfig.txIdToString (tx.id)+ " here["+here+"] get("+s+") started <<");
+                        val color = tx.get(s);
+                        //Console.OUT.println("Tx["+tx.id+"] " + TxConfig.txIdToString (tx.id)+ " here["+here+"] get("+s+") ended >>");
+                        if (color == null) {
+                            try {
+                          //      Console.OUT.println("Tx["+tx.id+"] " + TxConfig.txIdToString (tx.id)+ " here["+here+"] put("+s+") started <<");
+                                tx.put(s, new Color(placeId, clusterId));
+                                
+                            } finally {
+                           //     Console.OUT.println("Tx["+tx.id+"] " + TxConfig.txIdToString (tx.id)+ " here["+here+"] put("+s+") ended >>");
+                            }
+                        }
+                        used.add(s);
+                        //else if (! ((color as Color).placeId == placeId && (color as Color).clusterId == clusterId ) )
+                        //    throw new ConflictException("Tx[" + tx.id + "] " + here + " vertex " + s + " allocated by place " + (color as Color).placeId, here);
+                    }
+                });
+            }
         }
         
         outerCount = accum + innerCount;
@@ -201,8 +201,8 @@ public final class Clustering(plh:PlaceLocalHandle[ClusteringState]) implements 
                 };
                 
                 try {
-                	if (verbose > 0) Console.OUT.println(here + " vertex["+s+"] cluster started   ["+clusterId+"/"+vCount+"]");
-                	store.executeTransaction(closure);
+                    if (verbose > 0) Console.OUT.println(here + " vertex["+s+"] cluster started   ["+clusterId+"/"+vCount+"]");
+                    store.executeTransaction(closure);
                     if (g > 0 && clusterId%g == 0) Console.OUT.println(here + " vertex["+s+"] cluster succeeded ["+clusterId+"/"+vCount+"]");
                 } catch (ex:Exception) {
                     if (verbose > 0) Console.OUT.println(here + " vertex["+s+"] cluster failed    ["+clusterId+"/"+vCount+"]   msg["+ex.getMessage()+"] ");
@@ -220,14 +220,14 @@ public final class Clustering(plh:PlaceLocalHandle[ClusteringState]) implements 
     /**
      * Dump the clusters.
      */
-    private def printClusters() {
-        /*
+    private def printClusters(store:TxStore) {
+        val activePlaces = store.fixAndGetActivePlaces();
+        val places = activePlaces.size();
         Console.OUT.println("==============  Collecting clusters  ===============");
-        val result = map.executeLockingTransaction(new Rail[Long](0),new Rail[Int](0), new Rail[Boolean](0), 0, (tx:LockingTx[Int]) => {
-            val map = new HashMap[Long,ArrayList[Int]]();
+        val map = new HashMap[Long,ArrayList[Int]]();
+        store.executeLockingTx(new Rail[Long](0),new Rail[Any](0), new Rail[Boolean](0), 0, (tx:TxLocking) => {
             for (var tmpP:Long = 0; tmpP < places; tmpP++) {
-                val p = tmpP as Int;
-                val localMap = tx.evalAt(p, () => {
+                val localMap = at (activePlaces(tmpP)) {
                     val setIter = tx.keySet().iterator();                    
                     val pMap = new HashMap[Long,ArrayList[Int]]();
                     while (setIter.hasNext()) {
@@ -240,11 +240,11 @@ public final class Clustering(plh:PlaceLocalHandle[ClusteringState]) implements 
                                 tmpList = new ArrayList[Int]();
                                 pMap.put (clusterId, tmpList);
                             }
-                            tmpList.add(vertex);
+                            tmpList.add(vertex as Int);
                         }
                     }
-                    return pMap;
-                }) as HashMap[Long,ArrayList[Int]];
+                    pMap
+                };
                 
                 val iter = localMap.keySet().iterator();
                 while (iter.hasNext()) {
@@ -258,11 +258,10 @@ public final class Clustering(plh:PlaceLocalHandle[ClusteringState]) implements 
                     list.addAll(localList);
                 }
             }
-            
-            return map;
         });
-        val mergedMap = result.output as HashMap[Long,ArrayList[Int]];
         
+        val mergedMap = map;
+        var pointsInClusters:Long = 0;
         val iter = mergedMap.keySet().iterator();
         while (iter.hasNext()) {
             val key = iter.next();
@@ -270,13 +269,12 @@ public final class Clustering(plh:PlaceLocalHandle[ClusteringState]) implements 
             var str:String = "";
             for (x in list) {
                 str += x + " ";
+                pointsInClusters++;
             }
             Console.OUT.println("Cluster " + key + " = { " + str + " }");
         }
-        */
+        Console.OUT.println("Points in clusters = " + pointsInClusters);
     }
-    
-    
     
     public def run(store:TxStore, plh:PlaceLocalHandle[ClusteringState]) {
         val activePlaces = store.fixAndGetActivePlaces();
@@ -360,6 +358,7 @@ public final class Clustering(plh:PlaceLocalHandle[ClusteringState]) implements 
         Console.OUT.println("b = " + b);
         Console.OUT.println("c = " + c);
         Console.OUT.println("d = " + d);
+        Console.OUT.println("p = " + permute);
         
         if (!TxConfig.BUSY_LOCK) {
             Console.OUT.println("!!!!ERROR: you must set BUSY_LOCK=1 in this program!!!!");
@@ -389,7 +388,7 @@ public final class Clustering(plh:PlaceLocalHandle[ClusteringState]) implements 
         val procPct = procTime*100.0/totalTime;
 
         if(verbose > 2 || r > 0) 
-            app.printClusters();
+            app.printClusters(store);
 
         Console.OUT.println("Places: " + places + "  N: " + plh().N + "  Setup: " + distTime + "s  Processing: " + procTime + "s  Total: " + totalTime + "s  (proc: " + procPct  +  "%).");
     }
